@@ -8,20 +8,19 @@ services:
     networks:
       - local-iceberg-lakehouse
     environment:
-      AWS_ACCESS_KEY_ID: minio
-      AWS_SECRET_ACCESS_KEY: minio123
-      AWS_REGION: ap-southeast-1
-      AWS_ENDPOINT_URL_S3: http://10.0.129.58:9000
-      AWS_ENDPOINT_URL_STS: http://10.0.129.58:9000
       POLARIS_PERSISTENCE_TYPE: relational-jdbc
       QUARKUS_DATASOURCE_DB_KIND: postgresql
       QUARKUS_DATASOURCE_USERNAME: postgres
       QUARKUS_DATASOURCE_PASSWORD: secret
       QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/polaris
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_REGION: dummy-region
+      AWS_ENDPOINT_URL_S3: http://minio:9000
+      AWS_ENDPOINT_URL_STS: http://minio:9000
       POLARIS_BOOTSTRAP_CREDENTIALS: default-realm,root,secret
-      polaris.features.DROP_WITH_PURGE_ENABLED: true
+      polaris.features.DROP_WITH_PURGE_ENABLED: true # allow dropping tables from the SQL client
       polaris.realm-context.realms: default-realm
-      polaris.features."SUPPORTED_CATALOG_STORAGE_TYPES": "[\"S3\"]"
     healthcheck:
       test: ["CMD", "curl", "http://localhost:8182/q/health"]
       interval: 2s
@@ -40,27 +39,57 @@ services:
     volumes:
       - ./trino/catalog:/etc/trino/catalog
 
-  # minio:
-  #   image: quay.io/minio/minio
-  #   environment:
-  #     MINIO_ROOT_USER: minio
-  #     MINIO_ROOT_PASSWORD: minio123
-  #     MINIO_REGION_NAME: ap-southeast-1
-  #   networks:
-  #     - local-iceberg-lakehouse
-  #   ports:
-  #     - "9001:9001"
-  #     - "9000:9000"
-  #   command: ["server", "/data", "--console-address", ":9001"]
+  minio:
+    image: minio/minio:latest
+    environment:
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_REGION: dummy-region
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+      MINIO_DOMAIN: minio
+    networks:
+      local-iceberg-lakehouse:
+        aliases:
+          - warehouse.minio
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - ./minio/data:/data
+    command: ["server", "/data", "--console-address", ":9001"]
+
+  minio-client:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    networks:
+      - local-iceberg-lakehouse
+    volumes:
+      - /tmp:/tmp
+    environment:
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_REGION: dummy-region
+    entrypoint: >
+      /bin/sh -c "
+      until (mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
+      mc rm -r --force minio/warehouse;
+      mc mb minio/warehouse;
+      mc anonymous set public minio/warehouse;
+      tail -f /dev/null
+      " 
 
   postgres:
-    image: postgres:16
+    image: postgres:latest
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: secret
       POSTGRES_DB: polaris
     networks:
       - local-iceberg-lakehouse
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
    
